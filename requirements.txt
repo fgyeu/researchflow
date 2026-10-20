@@ -1,2 +1,7 @@
-fastapi
-uvicorn
+# 运行依赖
+fastapi>=0.115
+uvicorn>=0.30
+
+# 测试依赖（阶段 1 开始需要）
+pytest>=8.0
+pytest-asyncio>=0.24
