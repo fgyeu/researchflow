@@ -204,22 +204,36 @@ def test_read_url_rejects_bad_scheme():
 def test_web_search_returns_results():
     from app import tools
 
-    result = tools.web_search("large language model", max_results=3)
+    result = tools.web_search("large language model agent", max_results=4)
     assert result["ok"] is True, f"搜索失败: {result.get('error')}"
-    results = result["data"]["results"]
+    data = result["data"]
+    results = data["results"]
     assert len(results) > 0, "应该至少返回一条结果"
+    assert data["sources_used"], "应该记录用了哪些源"
     for r in results:
         assert r["title"]
         assert r["url"].startswith("http")
+        assert r["source"], "每条结果都要标注来源"
 
 
 @pytest.mark.network
-def test_read_url_wikipedia():
+def test_read_url_github_readme():
+    """GitHub 仓库要能拿到 README 正文，而不是导航栏垃圾。"""
     from app import tools
 
-    result = tools.read_url("https://en.wikipedia.org/wiki/Intelligent_agent", max_chars=500)
+    result = tools.read_url("https://github.com/langchain-ai/langgraph", max_chars=800)
     assert result["ok"] is True, f"读取失败: {result.get('error')}"
     data = result["data"]
-    assert data["total_chars"] > 500, "维基正文应该不止 500 字"
-    assert data["truncated"] is True, "max_chars 生效时应该标记截断"
-    assert len(data["text"]) == 500
+    assert data["source"] == "github-readme", f"应从 README 读取，实际: {data.get('source')}"
+    assert data["total_chars"] > 800
+    assert len(data["text"]) == 800
+
+
+@pytest.mark.network
+def test_read_url_truncates():
+    """max_chars 必须真的生效 —— 否则会烧爆上下文。"""
+    from app import tools
+
+    result = tools.read_url("https://example.com", max_chars=50)
+    assert result["ok"] is True
+    assert len(result["data"]["text"]) <= 50
