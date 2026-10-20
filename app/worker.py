@@ -43,8 +43,6 @@ from .config import settings
 # 同时最多跑几个研究任务。多出来的排队等待。
 MAX_CONCURRENCY = 2
 
-_semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
-
 # 持有后台任务的引用。不持有的话，asyncio 可能在任务跑完前把它回收掉。
 _background: set[asyncio.Task] = set()
 
@@ -53,6 +51,36 @@ _inflight: set[str] = set()
 
 # 本进程的身份标识，写进租约里
 OWNER = f"worker-{uuid.uuid4().hex[:8]}"
+
+# ---------------------------------------------------------------------------
+# 信号量：**延迟到事件循环里创建**
+#
+# 为什么不在模块级别写 `_semaphore = asyncio.Semaphore(2)`？
+# 因为 asyncio 的锁对象会绑定到"创建它时所在的事件循环"。
+# 模块导入时还没有运行中的事件循环，锁就会绑到一个空循环上。
+# 之后如果在别的事件循环里用它（比如测试里每次 asyncio.run 都是新循环），
+# 就会报：
+#     RuntimeError: <Semaphore> is bound to a different event loop
+#
+# 这个 bug 在真实服务里不会出现（只有一个循环），
+# 但在测试和实验脚本里必然踩到。所以改成按需创建。
+# ---------------------------------------------------------------------------
+_semaphore: asyncio.Semaphore | None = None
+_semaphore_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    """拿到当前事件循环对应的信号量。换循环就重建。"""
+    global _semaphore, _semaphore_loop
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # 没有运行中的循环，返回一个临时的（调用方通常不该在这种状态下用）
+        return asyncio.Semaphore(MAX_CONCURRENCY)
+    if _semaphore is None or _semaphore_loop is not loop:
+        _semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+        _semaphore_loop = loop
+    return _semaphore
 
 
 async def _heartbeat(run_id: str, stop: asyncio.Event) -> None:
@@ -100,7 +128,7 @@ async def _run_agent(run_id: str, question: str, attempt: int) -> None:
 
 
 async def _wrapped(run_id: str, question: str, attempt: int) -> None:
-    async with _semaphore:
+    async with _get_semaphore():
         try:
             await _run_agent(run_id, question, attempt)
         except Exception as exc:  # noqa: BLE001

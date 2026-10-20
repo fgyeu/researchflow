@@ -1,0 +1,52 @@
+{
+  "experiment": "cache_benefit",
+  "runs_per_scenario": 6,
+  "mode": "mock_llm + stub tools",
+  "scenarios": {
+    "A": {
+      "label": "A 缓存关 + 全不同问题",
+      "runs": 6,
+      "tool_calls": 12,
+      "cache_hits": 0,
+      "real_external_calls": 12,
+      "hit_rate": 0.0,
+      "avg_duration_s": 0.0346,
+      "succeeded": 6,
+      "failed": 0
+    },
+    "B": {
+      "label": "B 缓存开 + 全不同问题",
+      "runs": 6,
+      "tool_calls": 12,
+      "cache_hits": 5,
+      "real_external_calls": 7,
+      "hit_rate": 0.4167,
+      "avg_duration_s": 0.0418,
+      "succeeded": 6,
+      "failed": 0
+    },
+    "C": {
+      "label": "C 缓存关 + 重复问题  ",
+      "runs": 6,
+      "tool_calls": 12,
+      "cache_hits": 0,
+      "real_external_calls": 12,
+      "hit_rate": 0.0,
+      "avg_duration_s": 0.0437,
+      "succeeded": 6,
+      "failed": 0
+    },
+    "D": {
+      "label": "D 缓存开 + 重复问题  ",
+      "runs": 6,
+      "tool_calls": 12,
+      "cache_hits": 9,
+      "real_external_calls": 3,
+      "hit_rate": 0.75,
+      "avg_duration_s": 0.043,
+      "succeeded": 6,
+      "failed": 0
+    }
+  },
+  "saved_ratio_A_vs_D": 0.75
+}

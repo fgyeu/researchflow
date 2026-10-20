@@ -1,0 +1,58 @@
+{
+  "experiment": "reliability",
+  "mode": "mock_llm + stub tools",
+  "throughput": {
+    "1": {
+      "concurrency": 1,
+      "tasks": 8,
+      "elapsed_s": 40.162,
+      "succeeded": 8
+    },
+    "2": {
+      "concurrency": 2,
+      "tasks": 8,
+      "elapsed_s": 20.149,
+      "succeeded": 8
+    },
+    "4": {
+      "concurrency": 4,
+      "tasks": 8,
+      "elapsed_s": 10.111,
+      "succeeded": 8
+    }
+  },
+  "failure_injection": {
+    "关闭重试": {
+      "retries_allowed": 0,
+      "failure_model": "first call of each tool fails, then succeeds",
+      "tasks": 8,
+      "task_success_rate": 1.0,
+      "tasks_with_real_data": 7,
+      "data_success_rate": 0.875,
+      "tool_calls_total": 16,
+      "tool_calls_failed": 2,
+      "avg_calls_per_task": 2.0
+    },
+    "开启重试(2次)": {
+      "retries_allowed": 2,
+      "failure_model": "first call of each tool fails, then succeeds",
+      "tasks": 8,
+      "task_success_rate": 1.0,
+      "tasks_with_real_data": 8,
+      "data_success_rate": 1.0,
+      "tool_calls_total": 18,
+      "tool_calls_failed": 2,
+      "avg_calls_per_task": 2.25
+    }
+  },
+  "recovery": {
+    "tasks": 5,
+    "orphans_found": 5,
+    "resumed": 5,
+    "succeeded": 5,
+    "recovery_rate": 1.0,
+    "avg_attempts": 2,
+    "orphans_after": 0,
+    "elapsed_s": 10.09
+  }
+}

@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import urllib.error
 import urllib.request
@@ -57,7 +58,29 @@ def _mock_chat(messages: list[dict], step_no: int) -> dict:
         3. 最后给出报告
 
     这样上层代码走的是**和真实模型完全一样的路径**，mock 只替换了"决策来源"。
+
+    ## 为什么查询词要跟着研究问题变
+
+    最初这里写死了 `query="large language model agent"`。
+    结果做缓存实验时发现问题：不管研究什么，工具参数都一样，
+    所以第二次任务必然 100% 命中缓存 —— 测出来的命中率毫无意义。
+
+    现在用问题内容的 hash 派生查询词：
+        同一个研究问题 → 同样的查询 → 命中缓存（这是真实场景）
+        不同研究问题   → 不同查询 → 不命中（这也对）
+
+    这样缓存实验才有说服力。
     """
+    # 用 user 消息（研究问题）派生一个稳定的查询词
+    question = ""
+    for m in messages:
+        if m.get("role") == "user":
+            question = m.get("content") or ""
+            break
+
+    digest = hashlib.sha256(question.encode("utf-8")).hexdigest()[:8]
+    query = f"agent framework {digest}"
+
     if step_no == 1:
         return {
             "content": "",
@@ -65,19 +88,21 @@ def _mock_chat(messages: list[dict], step_no: int) -> dict:
                 {
                     "id": "mock_call_1",
                     "name": "web_search",
-                    "arguments": {"query": "large language model agent"},
+                    "arguments": {"query": query},
                 }
             ],
             "usage": {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150},
         }
     if step_no == 2:
+        # 读一个**固定**的网页：这才是真实场景里常见的
+        # "不同问题参考同一份文档" 的情况，能体现缓存价值
         return {
             "content": "",
             "tool_calls": [
                 {
                     "id": "mock_call_2",
                     "name": "read_url",
-                    "arguments": {"url": "https://en.wikipedia.org/wiki/Intelligent_agent"},
+                    "arguments": {"url": "https://example.com"},
                 }
             ],
             "usage": {"prompt_tokens": 400, "completion_tokens": 25, "total_tokens": 425},
