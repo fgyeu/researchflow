@@ -41,7 +41,7 @@ def _isolated_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def run_id():
-    return db.create_run("测试问题：对比主流 Agent 框架的 Memory 机制")
+    return db.create_run("测试问题：对比主流 Agent 框架的 Memory 机制")[0]
 
 
 # --------------------------------------------------------------------------
@@ -49,7 +49,7 @@ def run_id():
 # --------------------------------------------------------------------------
 
 def test_mock_agent_produces_report(run_id):
-    report, error = agent.run_research(run_id, "对比主流 Agent 框架的 Memory 机制")
+    report, error, _stats = agent.run_research(run_id, "对比主流 Agent 框架的 Memory 机制")
 
     assert error is None, f"不该报错，实际: {error}"
     assert report
@@ -97,7 +97,7 @@ def test_max_steps_guard(run_id, monkeypatch):
     """
     monkeypatch.setattr(settings, "max_steps", 2)
 
-    report, error = agent.run_research(run_id, "测试步数护栏")
+    report, error, _ = agent.run_research(run_id, "测试步数护栏")
 
     assert error is None
     assert report, "达到步数上限也必须交出报告，不能空手而归"
@@ -111,7 +111,7 @@ def test_token_budget_guard(run_id, monkeypatch):
     """把 token 预算压到很低，确认第二次决策前就会收尾。"""
     monkeypatch.setattr(settings, "max_tokens_budget", 200)
 
-    report, error = agent.run_research(run_id, "测试预算护栏")
+    report, error, _ = agent.run_research(run_id, "测试预算护栏")
 
     assert error is None
     assert report
@@ -154,7 +154,7 @@ def test_degraded_report_when_llm_fails(run_id, monkeypatch):
 
     monkeypatch.setattr(llm, "chat", _boom)
 
-    report, error = agent.run_research(run_id, "测试降级")
+    report, error, _ = agent.run_research(run_id, "测试降级")
 
     assert error is None, "不应把外部故障当成任务异常抛出去"
     assert report

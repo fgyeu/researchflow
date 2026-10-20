@@ -25,9 +25,32 @@
 from __future__ import annotations
 
 import json
+import time
 
-from . import db, llm, tools
+from . import cache, db, llm, tools
 from .config import settings
+
+
+def _classify_error(message: str) -> str:
+    """把错误信息归类。这决定了"要不要重试"。
+
+    这是可靠性设计里很小但很重要的一步：
+    盲目重试所有错误 = 让失败更慢；不重试可恢复错误 = 白白失败。
+    """
+    m = message.lower()
+    if "参数" in message or "arguments" in m:
+        return "bad_args"
+    if "不存在这个工具" in message:
+        return "unknown_tool"
+    if "timeout" in m or "超时" in m or "timed out" in m:
+        return "timeout"
+    if "http 5" in m or "http 429" in m or "rate limit" in m:
+        return "http_retryable"
+    if "http 4" in m:
+        return "http_client"      # 4xx 一般是请求本身有问题，重试没用
+    if "urlerror" in m or "connection" in m or "ssl" in m or "handshake" in m:
+        return "network"
+    return "unknown"
 
 SYSTEM_PROMPT = """你是一个严谨的研究助手。你的任务是围绕用户给出的问题做调研，并产出一份有依据的研究报告。
 
@@ -51,15 +74,19 @@ class ResearchAgent:
     状态都在实例里，跑完就丢，避免多任务之间互相污染。
     """
 
-    def __init__(self, run_id: str, question: str) -> None:
+    def __init__(self, run_id: str, question: str, attempt: int = 1) -> None:
         self.run_id = run_id
         self.question = question
+        self.attempt = attempt
         self.messages: list[dict] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": question},
         ]
         self.tokens_used = 0
         self.step_no = 0
+
+        # 缓存命中计数 —— 阶段 3 算命中率用
+        self.stats = {"tool_calls": 0, "cache_hits": 0, "retries": 0}
 
     # ------------------------------------------------------------------
     # 上下文管理
@@ -168,6 +195,13 @@ class ResearchAgent:
         )
 
     def _execute_tool(self, tc: dict) -> None:
+        """执行一个工具调用，依次经过三关：缓存 → 重试 → 记录。
+
+        这个顺序不是随意的：
+            先查缓存（最便宜，可能完全不用动手）
+            再重试（缓存没命中才真正执行，且失败还值得再试）
+            最后记录（无论走哪条路都要留痕）
+        """
         name = tc["name"]
         args = tc["arguments"]
 
@@ -177,20 +211,49 @@ class ResearchAgent:
             kind="tool",
             name=name,
             payload=json.dumps(args, ensure_ascii=False)[:1000],
+            attempt=self.attempt,
         )
 
-        # 模型吐出坏 JSON 的情况：明确当失败处理，让模型重试
+        # ---- 模型吐出坏 JSON：明确当失败处理，让模型自己重试 ----
         if "__parse_error__" in args:
             result = {"ok": False, "error": f"参数不是合法 JSON：{args['__parse_error__']}"}
+            error_type = "parse"
+            cached = False
         else:
-            result = tools.call_tool(name, args)
+            error_type = None
+            cached = False
+
+            # ---- 第一关：查缓存 ----
+            hit = cache.get(name, args)
+            if hit is not None:
+                result = hit
+                cached = True
+                self.stats["cache_hits"] += 1
+                db.bump_counters(self.run_id, tool_calls=1, cache_hits=1)
+            else:
+                # ---- 第二关：执行（带重试）----
+                result, error_type, retries = self._call_with_retry(name, args)
+                self.stats["tool_calls"] += 1
+                self.stats["retries"] += retries
+                db.bump_counters(self.run_id, tool_calls=1)
+                # 只有成功结果才写缓存（失败可能是瞬时的，缓存会延续故障）
+                if result.get("ok"):
+                    cache.put(name, args, result)
 
         output = json.dumps(result, ensure_ascii=False)
+
+        # 给缓存命中的结果加个标记，方便在 trace 里一眼看出来
+        if cached:
+            result_display = dict(result)
+            result_display["_cached"] = True
+            output = json.dumps(result_display, ensure_ascii=False)
+
         db.finish_step(
             step_id,
             "succeeded" if result.get("ok") else "failed",
             output[:4000],
             0,
+            error_type=error_type,
         )
 
         # 无论成功失败，都把结果回给模型 —— 让模型自己决定下一步
@@ -201,6 +264,49 @@ class ResearchAgent:
                 "content": output[:8000],
             }
         )
+
+    def _call_with_retry(self, name: str, args: dict) -> tuple[dict, str | None, int]:
+        """执行工具，失败则按指数退避重试。
+
+        返回 (结果, 错误类型, 实际重试次数)。
+
+        ## 为什么要分类错误
+
+        不是所有失败都值得重试：
+
+            timeout / http_5xx / 网络抖动  → 重试有意义（可能是瞬时的）
+            parse / 参数错误 / 未知工具     → 重试没用（再试还是错）
+
+        把这两类分开，是"可靠性设计"里最基本的判断。
+        盲目重试错误的东西，只会让失败更慢、更难查。
+
+        ## 为什么用指数退避
+
+        瞬时故障（对方限流、短时抖动）需要"等一下"。
+        固定间隔重试容易在对方刚恢复时又把它打挂。
+        1s → 2s → 4s 这种递增能显著提高成功率。
+        """
+        attempt = 0
+        while True:
+            result = tools.call_tool(name, args)
+            if result.get("ok"):
+                return result, None, attempt
+
+            err = str(result.get("error", ""))
+            error_type = _classify_error(err)
+
+            # 不可重试的错误，立刻返回
+            if error_type in ("parse", "unknown_tool", "bad_args"):
+                return result, error_type, attempt
+
+            if attempt >= settings.tool_max_retries:
+                result["retries_exhausted"] = attempt
+                return result, error_type, attempt
+
+            # 指数退避
+            delay = settings.retry_backoff * (2**attempt)
+            time.sleep(delay)
+            attempt += 1
 
     # ------------------------------------------------------------------
     # 收尾策略
@@ -265,11 +371,17 @@ class ResearchAgent:
         return "\n".join(lines)
 
 
-def run_research(run_id: str, question: str) -> tuple[str | None, str | None]:
-    """Worker 调这个函数。返回 (报告, 错误信息)，两者必有且仅有一个为 None。"""
-    agent = ResearchAgent(run_id, question)
+def run_research(
+    run_id: str, question: str, attempt: int = 1
+) -> tuple[str | None, str | None, dict]:
+    """Worker 调这个函数。
+
+    返回 (报告, 错误信息, 统计)，报告与错误必有且仅有一个为 None。
+    统计里带着工具调用数、缓存命中数、重试次数，阶段 3 的实验数据靠它。
+    """
+    agent = ResearchAgent(run_id, question, attempt=attempt)
     try:
         report = agent.run()
-        return report, None
+        return report, None, agent.stats
     except Exception as exc:  # noqa: BLE001
-        return None, f"{type(exc).__name__}: {exc}"
+        return None, f"{type(exc).__name__}: {exc}", agent.stats

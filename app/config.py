@@ -68,6 +68,27 @@ class Settings:
     # 这样跑测试、跑故障注入实验时不用花一分钱，也不受网络影响。
     mock_llm: bool = os.environ.get("MOCK_LLM", "0") == "1"
 
+    # ---- 阶段 2：可靠性相关 ----
+    # 是否启用工具结果缓存（做"缓存前后对比"实验时用来开关）
+    cache_enabled: bool = os.environ.get("CACHE_ENABLED", "1") == "1"
+
+    # 工具调用失败后的最大重试次数（不含首次）
+    tool_max_retries: int = int(os.environ.get("TOOL_MAX_RETRIES", "2"))
+    # 重试退避基数（秒）：第 n 次重试等 base * 2^(n-1)
+    retry_backoff: float = float(os.environ.get("RETRY_BACKOFF", "0.5"))
+
+    # 租约时长（秒）。Worker 必须在这个时间内续约，否则会被认为已死。
+    # 设得太短：正常的慢任务会被误判；设得太长：真死了要等很久才恢复。
+    lease_seconds: float = float(os.environ.get("LEASE_SECONDS", "30"))
+    # 续约间隔（秒），应远小于 lease_seconds
+    heartbeat_interval: float = float(os.environ.get("HEARTBEAT_INTERVAL", "5"))
+
+    # 单个任务最多被领取几次。超过就判死，避免"崩溃-恢复"无限循环。
+    max_attempts: int = int(os.environ.get("MAX_ATTEMPTS", "3"))
+
+    # 是否在服务启动时自动恢复孤儿任务
+    recover_on_startup: bool = os.environ.get("RECOVER_ON_STARTUP", "1") == "1"
+
     @property
     def llm_configured(self) -> bool:
         return bool(self.api_key) and not self.mock_llm
