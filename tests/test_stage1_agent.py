@@ -182,3 +182,44 @@ def test_tool_bad_arguments_returns_error():
     result = tools.call_tool("read_url", {"错误参数名": "x"})
     assert result["ok"] is False
     assert "参数" in result["error"]
+
+
+def test_read_url_rejects_bad_scheme():
+    """不支持的协议要明确拒绝，而不是尝试去连。"""
+    from app import tools
+
+    result = tools.call_tool("read_url", {"url": "file:///etc/passwd"})
+    assert result["ok"] is False
+    assert "协议" in result["error"]
+
+
+# --------------------------------------------------------------------------
+# 6. 联网工具（标了 network，默认跳过）
+#     跑法：pytest tests/ -m network
+#     为什么分开？因为它们依赖外部网络，会飘、会慢。
+#     单元测试要稳定，集成测试才联网 —— 这个区分本身也值得在面试里讲。
+# --------------------------------------------------------------------------
+
+@pytest.mark.network
+def test_web_search_returns_results():
+    from app import tools
+
+    result = tools.web_search("large language model", max_results=3)
+    assert result["ok"] is True, f"搜索失败: {result.get('error')}"
+    results = result["data"]["results"]
+    assert len(results) > 0, "应该至少返回一条结果"
+    for r in results:
+        assert r["title"]
+        assert r["url"].startswith("http")
+
+
+@pytest.mark.network
+def test_read_url_wikipedia():
+    from app import tools
+
+    result = tools.read_url("https://en.wikipedia.org/wiki/Intelligent_agent", max_chars=500)
+    assert result["ok"] is True, f"读取失败: {result.get('error')}"
+    data = result["data"]
+    assert data["total_chars"] > 500, "维基正文应该不止 500 字"
+    assert data["truncated"] is True, "max_chars 生效时应该标记截断"
+    assert len(data["text"]) == 500

@@ -65,7 +65,7 @@ def _mock_chat(messages: list[dict], step_no: int) -> dict:
                 {
                     "id": "mock_call_1",
                     "name": "web_search",
-                    "arguments": {"query": "mainstream open source agent frameworks memory"},
+                    "arguments": {"query": "large language model agent"},
                 }
             ],
             "usage": {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150},
@@ -77,7 +77,7 @@ def _mock_chat(messages: list[dict], step_no: int) -> dict:
                 {
                     "id": "mock_call_2",
                     "name": "read_url",
-                    "arguments": {"url": "https://example.com"},
+                    "arguments": {"url": "https://en.wikipedia.org/wiki/Intelligent_agent"},
                 }
             ],
             "usage": {"prompt_tokens": 400, "completion_tokens": 25, "total_tokens": 425},
