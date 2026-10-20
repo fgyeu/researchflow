@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS research_runs (
     status     TEXT NOT NULL,      -- pending | running | succeeded | failed
     report     TEXT,
     error      TEXT,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER,
     created_at REAL NOT NULL,
     started_at REAL,
     finished_at REAL
@@ -65,9 +67,32 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """建表。可以重复执行，不会覆盖已有数据。"""
+    """建表 + 补齐缺失的列。可以重复执行，不会覆盖已有数据。
+
+    为什么要自己写"补列"这段？
+    因为 `CREATE TABLE IF NOT EXISTS` 只在表不存在时建表。
+    如果阶段 0 已经建过表，阶段 1 新加的 tokens_used 列**永远不会出现**，
+    然后程序会在运行时抛 `no such column` —— 这个错误看起来莫名其妙。
+
+    这正好是一个真实的工程问题：**schema 变了，但线上已有数据怎么办。**
+    生产环境用 Alembic 这类迁移工具；这里数据量小，用最简单的办法：
+    检查列是否存在，缺了就 ALTER TABLE 加上。
+    """
     with _connect() as conn:
         conn.executescript(SCHEMA)
+
+        # 需要向后兼容补上的列：(列名, 类型定义)
+        wanted = [
+            ("tokens_used", "INTEGER NOT NULL DEFAULT 0"),
+            ("duration_ms", "INTEGER"),
+        ]
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(research_runs)").fetchall()
+        }
+        for name, decl in wanted:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE research_runs ADD COLUMN {name} {decl}")
 
 
 # --------------------------------------------------------------------------
@@ -112,6 +137,28 @@ def get_run(run_id: str) -> dict[str, Any] | None:
             "SELECT * FROM research_runs WHERE run_id = ?", (run_id,)
         ).fetchone()
     return dict(row) if row else None
+
+
+def set_run_duration(run_id: str, duration_ms: int) -> None:
+    """记录这次任务总共花了多久（墙钟时间，包含排队和模型等待）。"""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE research_runs SET duration_ms = ? WHERE run_id = ?",
+            (duration_ms, run_id),
+        )
+
+
+def add_run_tokens(run_id: str, tokens: int) -> None:
+    """累加 token 消耗。
+
+    阶段 2 会把它拆成"每次模型调用一行"，那样才能按步骤分析成本。
+    阶段 1 先只记总数，够用就行 —— 不提前为还没出现的需求做设计。
+    """
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE research_runs SET tokens_used = tokens_used + ? WHERE run_id = ?",
+            (tokens, run_id),
+        )
 
 
 def list_runs(limit: int = 20) -> list[dict[str, Any]]:
